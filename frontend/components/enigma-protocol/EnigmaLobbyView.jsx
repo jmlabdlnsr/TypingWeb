@@ -15,6 +15,13 @@ import {
 } from '../../lib/enigma-room-store';
 
 const ROOM_CAPACITY = 5;
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+
+function resolveApiBaseUrl() {
+  if (API_BASE_URL) return API_BASE_URL;
+  if (typeof window === 'undefined') return '';
+  return `${window.location.protocol}//${window.location.hostname}:4000`;
+}
 
 export default function EnigmaLobbyView() {
   const router = useRouter();
@@ -28,6 +35,9 @@ export default function EnigmaLobbyView() {
     'Pilih mode room lalu mulai.',
   );
   const [enteringFromLanding, setEnteringFromLanding] = useState(false);
+  const [onlinePlayers, setOnlinePlayers] = useState(null);
+  const [roomPanelOpen, setRoomPanelOpen] = useState(false);
+  const [setupTab, setSetupTab] = useState('create');
 
   useEffect(() => {
     try {
@@ -56,6 +66,34 @@ export default function EnigmaLobbyView() {
     return subscribeRoomStore(() => {
       syncRooms();
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function syncOnlinePlayers() {
+      try {
+        const response = await fetch(`${resolveApiBaseUrl()}/api/players/online`, {
+          cache: 'no-store',
+          headers: {
+            'x-session-token': getClientSessionId(),
+          },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!cancelled && response.ok) {
+          setOnlinePlayers(Number(payload.online) || 0);
+        }
+      } catch {
+        if (!cancelled) setOnlinePlayers(null);
+      }
+    }
+
+    syncOnlinePlayers();
+    const interval = window.setInterval(syncOnlinePlayers, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, []);
 
   const publicRooms = useMemo(
@@ -124,235 +162,208 @@ export default function EnigmaLobbyView() {
 
   return (
     <EnigmaFrame activeKey="lobby">
-      <section className={`hero-shell ${enteringFromLanding ? 'lobby-enter lobby-enter-active' : ''}`}>
-        <div>
-          <p className="section-tag cyan">LOBBY</p>
-          <h1>Translate Arena</h1>
-          <p>Buat room atau masuk lewat Room ID.</p>
+      <section className={`lobby-page ${enteringFromLanding ? 'lobby-enter lobby-enter-active' : ''}`}>
+        <div className="lobby-heading">
+          <div>
+            <span className="landing-version-pill">Lobby</span>
+            <h1>Room Tersedia</h1>
+            <p>Pilih room public yang aktif atau buat room baru untuk mulai bermain.</p>
+          </div>
         </div>
-        <div className="hero-actions">
-          <span className="status-chip offline">Offline</span>
-          <button
-            type="button"
-            className="shell-button subtle"
-            onClick={async () => setRooms(await loadRooms())}
-            suppressHydrationWarning
-          >
-            Refresh Room
-          </button>
-        </div>
-      </section>
 
-      <section className={`summary-grid ${enteringFromLanding ? 'lobby-enter lobby-enter-active' : ''}`}>
-        <article className="shell-card mini-card">
-          <p className="section-tag cyan">SERVER</p>
-          <h3>Offline</h3>
-          <div className="inline-meta">
-            <span className="status-chip offline">Offline</span>
-          </div>
-        </article>
-        <article className="shell-card mini-card">
-          <p className="section-tag magenta">ROOM</p>
-          <h3>{roomAccess === 'public' ? 'Public' : 'Private'}</h3>
-          <p>Akses room aktif.</p>
-        </article>
-        <article className="shell-card mini-card">
-          <p className="section-tag amber">MULAI</p>
-          <h3>Minimal 2 pemain</h3>
-          <p>Host memulai saat room siap.</p>
-        </article>
-      </section>
-
-      <section className={`lobby-grid ${enteringFromLanding ? 'lobby-enter lobby-enter-active' : ''}`}>
-        <article className="shell-card form-panel">
-          <p className="section-tag magenta">MASUK GAME</p>
-          <h2>Setup room</h2>
-
-          <div className="helper-box" style={{ marginTop: '18px' }}>
-            <strong>Agent aktif</strong>
-            <p>{playerName}</p>
-          </div>
-
-          <div className="helper-box" style={{ marginTop: '18px' }}>
-            <strong>Akses room</strong>
-            <div className="player-stack" style={{ marginTop: '12px' }}>
-              {['public', 'private'].map((access) => (
-                <label key={access} className="player-row" style={{ cursor: 'pointer' }}>
-                  <div>
-                    <strong>{access === 'public' ? 'Room Public' : 'Room Private'}</strong>
-                    <p>{access === 'public' ? 'Muncul di lobby.' : 'Masuk lewat Room ID.'}</p>
-                  </div>
-                  <input
-                    type="radio"
-                    name="room-access"
-                    checked={roomAccess === access}
-                    onChange={() => setRoomAccess(access)}
-                    aria-label={access}
-                    suppressHydrationWarning
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="helper-box" style={{ marginTop: '18px' }}>
-            <strong>Mode lawan</strong>
-            <div className="player-stack" style={{ marginTop: '12px' }}>
-              {ENIGMA_OPPONENT_CHOICES.map((option) => (
-                <label key={option.id} className="player-row" style={{ cursor: 'pointer' }}>
-                  <div>
-                    <strong>{option.label}</strong>
-                    <p>
-                      {option.id === 'training-ai'
-                        ? 'Simulasi lawan bot lokal.'
-                        : 'Sinkronisasi 2 tab via BroadcastChannel.'}
-                    </p>
-                  </div>
-                  <input
-                    type="radio"
-                    name="opponent-mode"
-                    checked={opponentMode === option.id}
-                    onChange={() => setOpponentMode(option.id)}
-                    aria-label={option.label}
-                    suppressHydrationWarning
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="warning-box">Dummy room sync aktif untuk simulasi lokal.</div>
-
-          <div className="input-block">
-            <span>Target operasi</span>
-            <div className="helper-box" style={{ marginTop: '0' }}>
-              <strong>Pilih sektor misi</strong>
-              <select
-                value={operationChoice}
-                onChange={(event) => setOperationChoice(event.target.value)}
-                aria-label="Target operasi"
-                suppressHydrationWarning
-                style={{
-                  marginTop: '12px',
-                  width: '100%',
-                  borderRadius: '16px',
-                  border: '1px solid rgba(32, 170, 216, 0.34)',
-                  background: 'rgba(5, 10, 28, 0.78)',
-                  color: 'var(--text-main)',
-                  padding: '0.95rem 1rem',
-                }}
-              >
-                {ENIGMA_OPERATION_CHOICES.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleCreateRoom}
-            className="shell-button gradient"
-            suppressHydrationWarning
-            style={{
-              display: 'inline-flex',
-              justifyContent: 'center',
-              width: '100%',
-              marginTop: '22px',
-            }}
-          >
-            {roomAccess === 'public' ? 'Buat Public Room' : 'Buat Private Room'}
-          </button>
-
-          <div className="divider" />
-
-          <label className="input-block">
-            <span>Kode room</span>
-            <div className="join-row">
-              <input
-                type="text"
-                value={roomCode}
-                onChange={(event) => setRoomCode(event.target.value.toUpperCase())}
-                placeholder="PUB-104"
-                suppressHydrationWarning
-              />
-              <button
-                type="button"
-                onClick={handleJoinByCode}
-                className="shell-button join"
-                suppressHydrationWarning
-                style={{
-                  display: 'inline-flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}
-              >
-                Gabung
-              </button>
-            </div>
-          </label>
-
-          <div className="helper-box">
-            <strong>Status</strong>
-            <p>{helperMessage}</p>
-          </div>
-        </article>
-
-        <article className="shell-card rooms-panel">
-          <div className="rooms-head">
+        <section className="lobby-room-section">
+          <div className="lobby-section-head">
             <div>
-              <p className="section-tag cyan">ROOM TERSEDIA</p>
               <h2>Public room</h2>
               <p>{publicRooms.length} room aktif</p>
             </div>
-            <button
-              type="button"
-              className="shell-button subtle"
-              onClick={async () => setRooms(await loadRooms())}
-              suppressHydrationWarning
-            >
-              Refresh
-            </button>
+            <div className="lobby-heading-actions">
+              <button
+                type="button"
+                className="lobby-primary-button"
+                onClick={() => {
+                  setRoomPanelOpen(true);
+                  setSetupTab('create');
+                }}
+                suppressHydrationWarning
+              >
+                Buat Room
+              </button>
+              <button
+                type="button"
+                className="lobby-ghost-button"
+                onClick={() => {
+                  setRoomPanelOpen(true);
+                  setSetupTab('join');
+                }}
+                suppressHydrationWarning
+              >
+                Masukan Kode
+              </button>
+              <div className="lobby-online-card">
+                <span>Player aktif</span>
+                <strong>{onlinePlayers ?? '-'}</strong>
+              </div>
+              <button
+                type="button"
+                className="lobby-ghost-button"
+                onClick={async () => setRooms(await loadRooms())}
+                suppressHydrationWarning
+              >
+                Refresh
+              </button>
+            </div>
           </div>
 
           {publicRooms.length === 0 ? (
-            <div className="empty-room">
-              <div>
-                <p className="section-tag cyan">KOSONG</p>
-                <h3>Belum ada room public</h3>
-                <p>Buat room public dari panel kiri agar pemain lain bisa langsung join.</p>
-              </div>
+            <div className="lobby-empty-state">
+              <h3>Belum ada room public</h3>
+              <p>Buat room public agar pemain lain bisa langsung join dari lobby.</p>
             </div>
           ) : (
-            <div className="room-list">
+            <div className="lobby-room-list">
               {publicRooms.map((room) => (
-                <div key={room.id} className="room-card">
+                <article key={room.id} className="lobby-room-card">
                   <div>
-                    <strong>{`Room ID: ${room.id}`}</strong>
+                    <strong>{room.id}</strong>
                     <p>{`Host: ${room.hostName}`}</p>
-                    <p>{room.opponentMode === 'local-network' ? 'Local Network' : 'Training AI'}</p>
-                    <p>{`${room.players.length}/${ROOM_CAPACITY} ${room.players.length < 2 ? 'Waiting' : 'Ready'}`}</p>
+                  </div>
+                  <div>
+                    <span>{room.opponentMode === 'local-network' ? 'Local Network' : 'Training AI'}</span>
+                    <small>{`${room.players.length}/${ROOM_CAPACITY} pemain`}</small>
                   </div>
                   <button
                     type="button"
-                    className="shell-button join"
+                    className="lobby-join-button"
                     onClick={() => handleJoinPublic(room.id)}
                     disabled={room.players.length >= ROOM_CAPACITY}
                     suppressHydrationWarning
-                    style={{
-                      opacity: room.players.length >= ROOM_CAPACITY ? 0.52 : 1,
-                      cursor: room.players.length >= ROOM_CAPACITY ? 'not-allowed' : 'pointer',
-                    }}
                   >
                     {room.players.length >= ROOM_CAPACITY ? 'Full' : 'Join'}
                   </button>
-                </div>
+                </article>
               ))}
             </div>
           )}
-        </article>
+        </section>
+
+        {roomPanelOpen ? (
+          <div className="lobby-modal-backdrop" role="presentation" onMouseDown={() => setRoomPanelOpen(false)}>
+          <section className="lobby-setup-panel" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="lobby-modal-close"
+              onClick={() => setRoomPanelOpen(false)}
+              aria-label="Tutup panel"
+            >
+              x
+            </button>
+            <div className="lobby-setup-tabs">
+              <button
+                type="button"
+                className={setupTab === 'create' ? 'active' : ''}
+                onClick={() => setSetupTab('create')}
+              >
+                Buat Room
+              </button>
+              <button
+                type="button"
+                className={setupTab === 'join' ? 'active' : ''}
+                onClick={() => setSetupTab('join')}
+              >
+                Masuk Kode
+              </button>
+            </div>
+
+            {setupTab === 'create' ? (
+              <div className="lobby-form-grid">
+                <div className="lobby-field-group">
+                  <span>Akses room</span>
+                  <div className="lobby-choice-grid two">
+                    {['public', 'private'].map((access) => (
+                      <button
+                        key={access}
+                        type="button"
+                        className={roomAccess === access ? 'active' : ''}
+                        onClick={() => setRoomAccess(access)}
+                      >
+                        <strong>{access === 'public' ? 'Public' : 'Private'}</strong>
+                        <small>{access === 'public' ? 'Muncul di lobby' : 'Masuk lewat kode'}</small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="lobby-field-group">
+                  <span>Mode lawan</span>
+                  <div className="lobby-choice-grid two">
+                    {ENIGMA_OPPONENT_CHOICES.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        className={opponentMode === option.id ? 'active' : ''}
+                        onClick={() => setOpponentMode(option.id)}
+                      >
+                        <strong>{option.id === 'training-ai' ? 'Training AI' : 'Local Network'}</strong>
+                        <small>{option.id === 'training-ai' ? 'Lawan bot lokal' : 'Lawan pemain lain'}</small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="lobby-field-group">
+                  <span>Sektor misi</span>
+                  <select
+                    value={operationChoice}
+                    onChange={(event) => setOperationChoice(event.target.value)}
+                    aria-label="Sektor misi"
+                    suppressHydrationWarning
+                  >
+                    {ENIGMA_OPERATION_CHOICES.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleCreateRoom}
+                  className="lobby-primary-button wide"
+                  suppressHydrationWarning
+                >
+                  {roomAccess === 'public' ? 'Buat Public Room' : 'Buat Private Room'}
+                </button>
+              </div>
+            ) : (
+              <div className="lobby-code-panel">
+                <label className="lobby-field-group">
+                  <span>Kode room</span>
+                  <input
+                    type="text"
+                    value={roomCode}
+                    onChange={(event) => setRoomCode(event.target.value.toUpperCase())}
+                    placeholder="PUB-104"
+                    suppressHydrationWarning
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleJoinByCode}
+                  className="lobby-primary-button wide"
+                  disabled={!roomCode.trim()}
+                  suppressHydrationWarning
+                >
+                  Gabung Room
+                </button>
+              </div>
+            )}
+
+            <div className="lobby-status-line">{helperMessage}</div>
+          </section>
+          </div>
+        ) : null}
       </section>
     </EnigmaFrame>
   );

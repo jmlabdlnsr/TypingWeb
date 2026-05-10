@@ -183,6 +183,7 @@ export default function EnigmaProtocolGame() {
   const isLocalNetwork = opponentMode === 'local-network';
   const hasRivalJoined = (roomState?.players?.length || 0) > 1;
   const isRealtimeCompetitive = hasRivalJoined;
+  const hasStartRequirement = isLocalNetwork ? hasRivalJoined : true;
 
   const currentPlayerRoleLabel = useMemo(() => {
     const activePlayer = roomState?.players?.find((player) => player.clientId === clientSessionId);
@@ -744,7 +745,11 @@ export default function EnigmaProtocolGame() {
     }
 
     if (origin === 'local' && currentPlayerRoleLabel === 'Host') {
-      await markRoomStarted(roomId, clientSessionId);
+      const result = await markRoomStarted(roomId, clientSessionId);
+      if (!result.success) {
+        setSystemMessage(result.error || 'Gagal memulai operasi. Pastikan ada minimal 2 pemain.');
+        return;
+      }
     }
 
     clearCountdownInterval();
@@ -954,6 +959,14 @@ export default function EnigmaProtocolGame() {
   }
 
   function handleReturnToLobby() {
+    if (postMatchData || !roomState) {
+      if (roomState) {
+        void leaveRoom(roomId, clientSessionId);
+      }
+      router.push('/enigma-protocol/lobby');
+      return;
+    }
+
     if (isLockedInGameplay) {
       setSystemMessage('Tidak bisa keluar lobby saat gameplay sedang berjalan.');
       return;
@@ -987,7 +1000,7 @@ export default function EnigmaProtocolGame() {
     currentPlayerRoleLabel === 'Host' &&
     !briefingAccepted &&
     !matchLocked &&
-    hasRivalJoined;
+    hasStartRequirement;
 
   if (!isHydrated) {
     return (
@@ -1230,7 +1243,7 @@ export default function EnigmaProtocolGame() {
                     }}
                   >
                     {currentPlayerRoleLabel === 'Host'
-                      ? hasRivalJoined
+                      ? hasStartRequirement
                         ? 'Force Start'
                         : roomCountdownLeft === null
                           ? 'Waiting for Rival'
@@ -1587,4 +1600,3 @@ export default function EnigmaProtocolGame() {
     </EnigmaFrame>
   );
 }
-

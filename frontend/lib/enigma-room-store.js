@@ -23,6 +23,7 @@ const roomCache = new Map();
 let publicRoomsCache = [];
 const listeners = new Set();
 const roomSockets = new Map();
+const roomSocketReconnect = new Map();
 let lobbySocket = null;
 let lobbySocketConnecting = false;
 
@@ -79,7 +80,9 @@ async function api(path, options = {}) {
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload.error || 'Backend request failed');
+      const error = new Error(payload.error || 'Backend request failed');
+      error.status = response.status;
+      throw error;
     }
     return payload;
   } catch (error) {
@@ -145,14 +148,17 @@ export async function loadRooms() {
 export async function getRoomById(roomId) {
   const normalized = roomId.trim().toUpperCase();
   const cached = roomCache.get(normalized);
-  if (cached) return { ...cached, id: cached.roomId };
 
   try {
     const payload = await api(`/api/rooms/${normalized}`);
     upsertRoom(payload.room);
     return payload.room ? { ...payload.room, id: payload.room.roomId } : null;
-  } catch {
-    return null;
+  } catch (error) {
+    if (error?.status === 404) {
+      removeRoom(normalized);
+      return null;
+    }
+    return cached ? { ...cached, id: cached.roomId } : null;
   }
 }
 
@@ -246,9 +252,9 @@ export async function markRoomStarted(roomId, clientId) {
     });
     upsertRoom(payload.room);
     emitRoomsUpdated();
-    return { success: true, room: { ...payload.room, id: payload.room.roomId } };
-  } catch {
-    return { success: false, room: null };
+    return { success: true, room: { ...payload.room, id: payload.room.roomId }, error: null };
+  } catch (error) {
+    return { success: false, room: null, error: error.message || 'Gagal memulai room.' };
   }
 }
 
@@ -304,6 +310,7 @@ export async function ensureRoomSocket(roomId, sessionToken = getClientSessionId
 
   const socket = new WebSocket(wsUrl(normalized, sessionToken));
   roomSockets.set(normalized, socket);
+  roomSocketReconnect.set(normalized, true);
 
   socket.onmessage = (event) => {
     try {
@@ -319,7 +326,10 @@ export async function ensureRoomSocket(roomId, sessionToken = getClientSessionId
 
   socket.onclose = () => {
     roomSockets.delete(normalized);
+    const shouldReconnect = roomSocketReconnect.get(normalized) !== false;
+    roomSocketReconnect.delete(normalized);
     emitRealtime({ roomId: normalized, event: 'socket_closed' });
+    if (!shouldReconnect) return;
     window.setTimeout(() => {
       ensureRoomSocket(normalized, sessionToken);
       getRoomById(normalized).then((room) => {
@@ -340,6 +350,7 @@ export function closeRoomSocket(roomId) {
   const normalized = roomId.trim().toUpperCase();
   const socket = roomSockets.get(normalized);
   if (socket) {
+    roomSocketReconnect.set(normalized, false);
     socket.close();
     roomSockets.delete(normalized);
   }
@@ -348,5 +359,6 @@ export function closeRoomSocket(roomId) {
 export function sendRoomRealtimeEvent(roomId, event, payload = {}) {
   const socket = roomSockets.get(roomId.trim().toUpperCase());
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ event, ...payload }));
+  const data = { event, by: getClientSessionId(), ...payload };
+  socket.send(JSON.stringify(data));
 }

@@ -16,9 +16,19 @@ function getSessionToken() {
   return token;
 }
 
+function toApi(path) {
+  if (API_BASE_URL) {
+    return `${API_BASE_URL}${path}`;
+  }
+  if (typeof window === 'undefined') {
+    return path;
+  }
+  return `${window.location.protocol}//${window.location.hostname}:4000${path}`;
+}
+
 async function api(path, options = {}) {
   const token = getSessionToken();
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(toApi(path), {
     ...options,
     headers: {
       'Content-Type': 'application/json',

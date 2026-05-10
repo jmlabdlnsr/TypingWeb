@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 const IDENTITY_STORAGE_KEY = 'enigma_agent_identity_v1';
@@ -35,6 +35,12 @@ const PROFILE_MODES = [
   },
 ];
 
+const LANDING_FEATURES = [
+  { icon: 'bolt', label: 'Real-time' },
+  { icon: 'users', label: 'Multiplayer' },
+  { icon: 'trophy', label: 'Leaderboard' },
+];
+
 function loadIdentity() {
   if (typeof window === 'undefined') {
     return null;
@@ -60,56 +66,41 @@ function toDisplayName(rawName) {
   return rawName?.replace(/^(agent|agen)\s+/i, '').trim() || '';
 }
 
-function RadarProfile({ reacting }) {
-  return (
-    <div className={`profile-visual profile-radar ${reacting ? 'reacting' : ''}`}>
-      <span className="profile-ring ring-a" />
-      <span className="profile-ring ring-b" />
-      <span className="profile-ring ring-c" />
-      <span className="profile-scan-line" />
-      <span className="profile-core-dot" />
-    </div>
-  );
+function getSessionToken() {
+  if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') return '';
+  const existing = window.sessionStorage.getItem(SESSION_KEY);
+  if (existing) return existing;
+  const token = `sess_${Math.random().toString(36).slice(2, 12)}`;
+  window.sessionStorage.setItem(SESSION_KEY, token);
+  return token;
 }
 
-function GlobeProfile({ reacting }) {
-  return (
-    <div className={`profile-visual profile-globe ${reacting ? 'reacting' : ''}`}>
-      <span className="globe-shell" />
-      <span className="globe-lat lat-top" />
-      <span className="globe-lat lat-mid" />
-      <span className="globe-lat lat-bottom" />
-      <span className="globe-long long-left" />
-      <span className="globe-long long-right" />
-      <span className="globe-long long-center" />
-    </div>
-  );
-}
-
-function SignalProfile({ reacting }) {
-  return (
-    <div className={`profile-visual profile-signal ${reacting ? 'reacting' : ''}`}>
-      <span className="signal-bar signal-a" />
-      <span className="signal-bar signal-b" />
-      <span className="signal-bar signal-c" />
-      <span className="signal-bar signal-d" />
-      <span className="signal-bar signal-e" />
-      <span className="signal-orbit orbit-a" />
-      <span className="signal-orbit orbit-b" />
-    </div>
-  );
-}
-
-function ProfilePreview({ mode, reacting }) {
-  if (mode === 'globe') {
-    return <GlobeProfile reacting={reacting} />;
+function FeatureIcon({ type }) {
+  if (type === 'users') {
+    return (
+      <span className="landing-feature-icon users" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+    );
   }
 
-  if (mode === 'signal') {
-    return <SignalProfile reacting={reacting} />;
+  if (type === 'trophy') {
+    return (
+      <span className="landing-feature-icon trophy" aria-hidden="true">
+        <span className="trophy-cup" />
+        <span className="trophy-stem" />
+        <span className="trophy-base" />
+      </span>
+    );
   }
 
-  return <RadarProfile reacting={reacting} />;
+  return (
+    <span className="landing-feature-icon bolt" aria-hidden="true">
+      <span />
+    </span>
+  );
 }
 
 export default function EnigmaLandingPage() {
@@ -119,11 +110,7 @@ export default function EnigmaLandingPage() {
   const [profileMode, setProfileMode] = useState(PROFILE_MODES[0].id);
   const [isReady, setIsReady] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-
-  const activeProfile = useMemo(
-    () => PROFILE_MODES.find((item) => item.id === profileMode) || PROFILE_MODES[0],
-    [profileMode],
-  );
+  const [onlinePlayers, setOnlinePlayers] = useState(null);
 
   useEffect(() => {
     const existingIdentity = loadIdentity();
@@ -155,11 +142,35 @@ export default function EnigmaLandingPage() {
     return () => window.clearInterval(interval);
   }, []);
 
-  function cycleProfileMode() {
-    const currentIndex = PROFILE_MODES.findIndex((item) => item.id === profileMode);
-    const nextMode = PROFILE_MODES[(currentIndex + 1) % PROFILE_MODES.length];
-    setProfileMode(nextMode.id);
-  }
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchOnlinePlayers() {
+      try {
+        const response = await fetch(`${resolveApiBaseUrl()}/api/players/online`, {
+          cache: 'no-store',
+          headers: {
+            'x-session-token': getSessionToken(),
+          },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!cancelled && response.ok) {
+          setOnlinePlayers(Number(payload.online) || 0);
+        }
+      } catch {
+        if (!cancelled) {
+          setOnlinePlayers(null);
+        }
+      }
+    }
+
+    fetchOnlinePlayers();
+    const interval = window.setInterval(fetchOnlinePlayers, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   async function initializeConnection() {
     const rawName = codename.trim();
@@ -173,13 +184,7 @@ export default function EnigmaLandingPage() {
     }
 
     const normalizedCodename = `Agent ${rawName}`;
-    const sessionToken =
-      (typeof window !== 'undefined' && window.sessionStorage.getItem(SESSION_KEY)) ||
-      `sess_${Math.random().toString(36).slice(2, 12)}`;
-
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem(SESSION_KEY, sessionToken);
-    }
+    const sessionToken = getSessionToken();
 
     try {
       const response = await fetch(`${resolveApiBaseUrl()}/api/session/guest`, {
@@ -209,55 +214,37 @@ export default function EnigmaLandingPage() {
     router.push('/enigma-protocol/lobby');
   }
 
+  const [titleFirst = '', ...titleRest] = typedTitle.split(' ');
+  const titleSecond = titleRest.join(' ');
+
   return (
     <main className="landing-shell">
       <div className="landing-grid-overlay" />
-      <div className="landing-particles">
-        <span className="particle p-a" />
-        <span className="particle p-b" />
-        <span className="particle p-c" />
-        <span className="particle p-d" />
-        <span className="particle p-e" />
-        <span className="particle p-f" />
-      </div>
-
-      <section className="landing-card">
-        <div className="landing-badge-row">
-          <div className="landing-brand-chip">
-            <span className="brand-dot" />
-            <div>
-              <strong>Enigma Protocol</strong>
-              <small>Simulation Deck</small>
-            </div>
-          </div>
-        </div>
-
-        <div className="landing-card-header landing-card-header-centered">
-          <p className="section-tag cyan">MAIN LANGSUNG</p>
+      <section className="landing-stage">
+        <div className="landing-copy-panel">
+          <span className="landing-version-pill">Beta v2.0</span>
           <h1 className="landing-title">
-            {typedTitle}
-            <span className="type-caret" aria-hidden="true" />
+            <span>{titleFirst}</span>
+            <span className="landing-title-accent">
+              {titleSecond}
+              <span className="type-caret" aria-hidden="true" />
+            </span>
           </h1>
-          <p className="landing-subtitle">Secure Decryption &amp; Transmission Simulation</p>
+          <p className="landing-subtitle">Adu kecepatan mengetik melawan player lain</p>
+
+          <div className="landing-feature-grid">
+            {LANDING_FEATURES.map((feature) => (
+              <div key={feature.label} className="landing-feature-card">
+                <FeatureIcon type={feature.icon} />
+                <span>{feature.label}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="identity-shell identity-shell-centered">
-          <button
-            type="button"
-            className={`profile-switch profile-switch-large ${activeProfile.accent}`}
-            onClick={cycleProfileMode}
-            aria-label={`Ganti visual profil. Mode aktif: ${activeProfile.label}`}
-            suppressHydrationWarning
-          >
-            <ProfilePreview mode={profileMode} reacting={codename.trim().length > 0} />
-          </button>
-
-          <div className="identity-copy landing-identity-copy">
-            <strong>{activeProfile.label}</strong>
-          </div>
-
-          <label className="input-block landing-input-block compact">
-            <span>Agent Codename</span>
+        <section className="landing-card">
+          <label className="landing-form-field">
+            <span>Agent Name</span>
             <input
               type="text"
               value={codename}
@@ -265,28 +252,28 @@ export default function EnigmaLandingPage() {
                 setCodename(event.target.value);
                 if (errorMessage) setErrorMessage('');
               }}
-              placeholder="Farhan"
+              placeholder="Masukkan nama kamu"
               autoComplete="off"
               suppressHydrationWarning
             />
-            {errorMessage ? (
-              <small style={{ color: 'var(--danger)' }}>{errorMessage}</small>
-            ) : (
-              <small>{`Akan disimpan sebagai: Agent ${codename.trim() || '...'}`}</small>
-            )}
+            {errorMessage ? <small>{errorMessage}</small> : null}
           </label>
-        </div>
 
-        <div className="landing-footer landing-footer-centered">
           <button
             type="button"
             className="landing-button"
             onClick={initializeConnection}
             suppressHydrationWarning
           >
-            Main
+            <span className="landing-play-icon" aria-hidden="true" />
+            Mulai Bermain
           </button>
-        </div>
+
+          <div className="landing-card-footer">
+            <span>Players online</span>
+            <strong>{onlinePlayers ?? '-'}</strong>
+          </div>
+        </section>
       </section>
     </main>
   );

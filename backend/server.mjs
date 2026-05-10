@@ -9,6 +9,7 @@ const ROOM_CAPACITY = 5;
 const ROOM_AUTO_START_COUNTDOWN_MS = Number(process.env.ROOM_AUTO_START_COUNTDOWN_MS || 20 * 1000);
 const ROOM_IDLE_TTL_MS = Number(process.env.ROOM_IDLE_TTL_MS || 10 * 60 * 1000);
 const SESSION_ACTIVE_TTL_MS = Number(process.env.SESSION_ACTIVE_TTL_MS || 30 * 60 * 1000);
+const ONLINE_ACTIVE_TTL_MS = Number(process.env.ONLINE_ACTIVE_TTL_MS || 15 * 1000);
 const CORS_ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
   .map((item) => item.trim())
@@ -19,7 +20,7 @@ const USERS_FILE = join(DATA_DIR, 'users.json');
 const MATCHES_FILE = join(DATA_DIR, 'matches.json');
 
 const rooms = new Map();
-const sessionToConnection = new Map();
+const sessionToConnections = new Map();
 const sessionToRoomId = new Map();
 const sessionLastActiveAt = new Map();
 const globalConnections = new Set();
@@ -106,7 +107,9 @@ function snapshotRoom(room) {
 }
 
 function canRoomStart(room) {
-  return (room?.players?.length || 0) >= 2;
+  if (!room) return false;
+  if (room.opponentMode === 'training-ai') return room.players.length >= 1;
+  return room.players.length >= 2;
 }
 
 function ensureCountdown(room) {
@@ -208,9 +211,26 @@ function cleanupInactiveSessions() {
   for (const [sessionToken, lastSeen] of sessionLastActiveAt.entries()) {
     if (timestamp - lastSeen <= SESSION_ACTIVE_TTL_MS) continue;
     sessionLastActiveAt.delete(sessionToken);
-    sessionToConnection.delete(sessionToken);
+    sessionToConnections.delete(sessionToken);
     sessionToRoomId.delete(sessionToken);
   }
+}
+
+function activeSessionCount() {
+  cleanupInactiveSessions();
+  const timestamp = now();
+  const activeSessions = new Set(
+    [...sessionLastActiveAt.entries()]
+      .filter(([, lastSeen]) => timestamp - lastSeen <= ONLINE_ACTIVE_TTL_MS)
+      .map(([sessionToken]) => sessionToken),
+  );
+  for (const [sessionToken, connections] of sessionToConnections.entries()) {
+    const hasOpenConnection = [...connections].some((conn) => conn.readyState === 1);
+    if (hasOpenConnection) {
+      activeSessions.add(sessionToken);
+    }
+  }
+  return activeSessions.size;
 }
 
 function findRoomByPlayer(sessionToken) {
@@ -226,10 +246,12 @@ function visiblePublicRooms() {
 }
 
 function broadcastToRoom(roomId, event, payload = {}) {
-  for (const [sessionToken, conn] of sessionToConnection.entries()) {
+  for (const [sessionToken, connections] of sessionToConnections.entries()) {
     if (sessionToRoomId.get(sessionToken) !== roomId) continue;
-    if (conn.readyState !== 1) continue;
-    conn.send(JSON.stringify({ event, occurredAt: now(), ...payload }));
+    for (const conn of connections) {
+      if (conn.readyState !== 1 || !conn.isRoomConnection) continue;
+      conn.send(JSON.stringify({ event, occurredAt: now(), ...payload }));
+    }
   }
 }
 
@@ -253,11 +275,11 @@ function broadcastGlobalRoomsUpdated() {
 function deleteRoom(roomId, reason = 'room_deleted') {
   const room = rooms.get(roomId);
   if (!room) return;
+  broadcastToRoom(roomId, reason, { roomId });
   rooms.delete(roomId);
   for (const player of room.players) {
     sessionToRoomId.delete(player.clientId);
   }
-  broadcastToRoom(roomId, reason, { roomId });
   broadcastGlobalRoomsUpdated();
 }
 
@@ -350,6 +372,11 @@ const server = createServer(async (req, res) => {
   const method = req.method || 'GET';
 
   if (path === '/api/health') return sendJson(res, 200, { ok: true, timestamp: now() });
+
+  if (path === '/api/players/online' && method === 'GET') {
+    markSessionActive(getSessionToken(req));
+    return sendJson(res, 200, { online: activeSessionCount() });
+  }
 
   if (path === '/api/session/guest' && method === 'POST') {
     const body = await parseBody(req);
@@ -551,7 +578,12 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
-  sessionToConnection.set(sessionToken, ws);
+  ws.isRoomConnection = Boolean(roomId);
+  if (!sessionToConnections.has(sessionToken)) {
+    sessionToConnections.set(sessionToken, new Set());
+  }
+  sessionToConnections.get(sessionToken).add(ws);
+
   if (roomId) {
     sessionToRoomId.set(sessionToken, roomId);
   } else {
@@ -589,8 +621,23 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     globalConnections.delete(ws);
-    sessionToConnection.delete(sessionToken);
-    disconnectPlayer(sessionToken);
+    const connections = sessionToConnections.get(sessionToken);
+    if (connections) {
+      connections.delete(ws);
+      if (connections.size === 0) {
+        sessionToConnections.delete(sessionToken);
+      }
+    }
+
+    if (!ws.isRoomConnection) {
+      return;
+    }
+
+    const hasActiveRoomSocket = [...(sessionToConnections.get(sessionToken) || [])]
+      .some((conn) => conn.isRoomConnection && conn.readyState === 1);
+    if (!hasActiveRoomSocket) {
+      disconnectPlayer(sessionToken);
+    }
   });
 });
 
