@@ -21,7 +21,6 @@ import { useAudio } from '../audio/AudioProvider';
 const STAGE_DURATION_SECONDS = 70;
 const BONUS_PHASE_DURATION_SECONDS = 50;
 const MATCH_OVER_DELAY_MS = 3000;
-const ROOM_COUNTDOWN_SECONDS = 20;
 const ALL_TIME_RECORD = {
   label: 'All-Time Best Record',
   codename: 'Archive Prime',
@@ -85,7 +84,7 @@ export default function EnigmaProtocolGame() {
   const revealLoopStartedRef = useRef(false);
   const timeoutWarningActiveRef = useRef(false);
   const stageClearStageRef = useRef('');
-  const { muted, play, stop } = useAudio();
+  const { play, stop } = useAudio();
 
   const [isHydrated, setIsHydrated] = useState(false);
   const [roomState, setRoomState] = useState(null);
@@ -99,7 +98,6 @@ export default function EnigmaProtocolGame() {
   const [lastObservedResetVersion, setLastObservedResetVersion] = useState(0);
   const [rivalProgress, setRivalProgress] = useState(0);
   const [rivalReady, setRivalReady] = useState(false);
-  const [channelLive, setChannelLive] = useState(false);
   const [matchOverlay, setMatchOverlay] = useState(null);
   const [postMatchData, setPostMatchData] = useState(null);
   const [matchStartedAt, setMatchStartedAt] = useState(null);
@@ -107,14 +105,13 @@ export default function EnigmaProtocolGame() {
   const [typoCount, setTypoCount] = useState(0);
   const [matchLocked, setMatchLocked] = useState(false);
   const [revealedMasterFile, setRevealedMasterFile] = useState('');
-  const [roomCountdownLeft, setRoomCountdownLeft] = useState(null);
   const [rivalName, setRivalName] = useState('Enemy Agent');
 
   const roomId = searchParams.get('roomId') || 'ROOM-LOCAL';
   const playerName = searchParams.get('player') || 'Agent Farhan';
   const playerRole = searchParams.get('role') || 'host';
   const clientSessionId = isHydrated ? getClientSessionId() : 'server-session';
-  const isLockedInGameplay = briefingAccepted || Boolean(roomState?.startedAt) || roomCountdownLeft === 0;
+  const isLockedInGameplay = briefingAccepted || Boolean(roomState?.startedAt);
 
   function clearCountdownInterval() {
     if (countdownIntervalRef.current) {
@@ -125,8 +122,6 @@ export default function EnigmaProtocolGame() {
 
   const {
     activeOperation,
-    stages,
-    stageQueue,
     totalStageCount,
     completedStageCount,
     currentStageNumber,
@@ -214,16 +209,11 @@ export default function EnigmaProtocolGame() {
 
   useEffect(() => {
     if (!isHydrated) {
-      setChannelLive(false);
       return undefined;
     }
 
     ensureRoomSocket(roomId, clientSessionId);
-    setChannelLive(true);
-
-    return () => {
-      setChannelLive(false);
-    };
+    return undefined;
   }, [clientSessionId, isHydrated, roomId]);
 
   useEffect(() => {
@@ -259,9 +249,9 @@ export default function EnigmaProtocolGame() {
       } else if (message.event === 'disconnect_leave') {
         setSystemMessage(`${message.playerName || 'Player'} keluar dari pertandingan.`);
       } else if (message.event === 'countdown_started') {
-        setSystemMessage('Countdown mulai. Match akan dimulai otomatis.');
+        setSystemMessage('Room siap. Host dapat memulai operasi saat semua pemain sudah siap.');
       } else if (message.event === 'countdown_cancelled') {
-        setSystemMessage('Countdown dibatalkan. Menunggu pemain lain masuk.');
+        setSystemMessage('Menunggu pemain lain masuk kembali.');
       } else if (message.event === 'match_forfeit') {
         setSystemMessage('Pemain keluar. Pertandingan gugur karena anggota kurang dari 50%.');
         setMatchLocked(true);
@@ -284,13 +274,6 @@ export default function EnigmaProtocolGame() {
 
     startOperation('remote');
   }, [briefingAccepted, roomState?.startedAt]);
-
-  useEffect(() => {
-    if (briefingAccepted || roomCountdownLeft !== 0 || !hasRivalJoined) {
-      return;
-    }
-    startOperation('remote');
-  }, [briefingAccepted, hasRivalJoined, roomCountdownLeft]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -327,27 +310,6 @@ export default function EnigmaProtocolGame() {
       window.removeEventListener('popstate', onPopState);
     };
   }, [isHydrated, isLockedInGameplay]);
-
-  useEffect(() => {
-    if (roomState?.startedAt) {
-      setRoomCountdownLeft(0);
-      return undefined;
-    }
-    if (!roomState?.countdownStartedAt) {
-      setRoomCountdownLeft(null);
-      return undefined;
-    }
-
-    const update = () => {
-      const elapsedSeconds = Math.floor((Date.now() - roomState.countdownStartedAt) / 1000);
-      const left = Math.max(0, ROOM_COUNTDOWN_SECONDS - elapsedSeconds);
-      setRoomCountdownLeft(left);
-    };
-
-    update();
-    const timer = window.setInterval(update, 500);
-    return () => window.clearInterval(timer);
-  }, [roomState?.countdownStartedAt, roomState?.startedAt]);
 
   useEffect(() => {
     return () => {
@@ -994,8 +956,11 @@ export default function EnigmaProtocolGame() {
   const activeTimer = gameMode === 'end-challenge' ? bonusTimeLeft : stageTimeLeft;
   const isTimerDanger = activeTimer <= 7;
   const timerToneClass = isTimerDanger ? 'offline' : 'online';
-  const briefingBlocks = stages.map((_, index) => `Stage ${index + 1}`);
-  const queuePreview = stageQueue.map((stageIndex) => `Stage ${stageIndex + 1}`);
+  const preMatchStatusLabel = hasStartRequirement
+    ? currentPlayerRoleLabel === 'Host'
+      ? 'Siap dimulai'
+      : 'Menunggu host'
+    : 'Menunggu lawan';
   const canStartOperation =
     currentPlayerRoleLabel === 'Host' &&
     !briefingAccepted &&
@@ -1033,7 +998,7 @@ export default function EnigmaProtocolGame() {
           <div>
             <p className="section-tag cyan">ROOM CLOSED</p>
             <h1>Enigma Protocol</h1>
-            <p>Room ini sudah tidak tersedia atau telah dibersihkan dari sistem dummy.</p>
+            <p>Room ini sudah tidak tersedia atau telah ditutup oleh sistem.</p>
           </div>
           <div className="hero-actions">
             <span className="status-chip offline">Unavailable</span>
@@ -1079,12 +1044,12 @@ export default function EnigmaProtocolGame() {
           <article className="shell-card mini-card">
             <p className="section-tag magenta">RESULT</p>
             <h3>{postMatchData.localSummary.result}</h3>
-            <p>{`Score ${postMatchData.localSummary.score} • ${postMatchData.localSummary.wpm} WPM`}</p>
+            <p>{`Score ${postMatchData.localSummary.score} - ${postMatchData.localSummary.wpm} WPM`}</p>
           </article>
           <article className="shell-card mini-card">
             <p className="section-tag amber">WINNER</p>
             <h3>{postMatchData.winnerName}</h3>
-            <p>Match over sync complete.</p>
+            <p>Hasil match sudah tersimpan.</p>
           </article>
         </section>
 
@@ -1093,10 +1058,10 @@ export default function EnigmaProtocolGame() {
             <div>
               <p className="section-tag cyan">POST-MATCH BOARD</p>
               <h2>Mission ranking</h2>
-              <p>Top dua match saat ini dan satu catatan dummy all-time.</p>
+              <p>Ringkasan hasil match saat ini.</p>
             </div>
             <button type="button" className="shell-button subtle" onClick={handleReturnToLobby}>
-              Return to Lobby
+              Kembali ke Lobby
             </button>
           </div>
 
@@ -1132,106 +1097,90 @@ export default function EnigmaProtocolGame() {
 
   return (
     <EnigmaFrame hideNav className="room-game">
-      <section className="hero-shell room-header">
-        <div>
-          <p className="section-tag cyan">ROOM {roomId}</p>
-          <h1>Enigma Protocol</h1>
-          <p>Ruang dekripsi aktif untuk simulasi operasi dua agen.</p>
-        </div>
-        <div className="hero-actions">
-          <span className={`status-chip ${channelLive ? 'online' : 'offline'}`}>
-            {hasRivalJoined ? 'Linked' : 'Waiting'}
-          </span>
-          <Link
-            href="/enigma-protocol/lobby"
-            className="shell-button subtle"
-            style={{ textDecoration: 'none' }}
-          >
-            Kembali ke Lobby
-          </Link>
-        </div>
-      </section>
-
-      <section className="summary-grid room-summary">
-        <article className="shell-card mini-card">
-          <p className="section-tag cyan">AGENT</p>
-          <h3>{playerName}</h3>
-          <p>{`${currentPlayerRoleLabel} • ${hasRivalJoined ? 'Link active.' : 'Waiting for Player 2.'}`}</p>
-        </article>
-        <article className="shell-card mini-card">
-          <p className="section-tag magenta">PVP</p>
-          <h3>{isLocalNetwork ? 'Local Network' : 'Training AI'}</h3>
-          <p>{roomState?.operationLabel || activeOperation.alias}</p>
-        </article>
-        <article className="shell-card mini-card">
-          <p className="section-tag amber">STATUS</p>
-          <h3>{gameMode === 'typing' ? `${currentStageNumber} / ${totalStageCount}` : 'END'}</h3>
-          <p>{`Timer ${activeTimer}s • Queue ${stageQueue.length} • ${muted ? 'Muted' : 'Audio Live'}`}</p>
-        </article>
-      </section>
-
-      <section className="typing-layout">
+      <section className={`typing-layout ${briefingAccepted ? '' : 'room-lobby-layout'}`}>
         <div className="typing-main">
           <article className="shell-card typing-card">
             <div className="card-head">
               <div>
-                <p className="section-tag cyan">MISSION FEED</p>
                 <h2>
                   {gameMode === 'typing'
                     ? briefingAccepted
                       ? `Stage ${currentStageNumber}`
-                      : 'Operation Briefing'
+                      : 'Lobby Room'
                     : 'End Challenge'}
                 </h2>
                 <p>
                   {briefingAccepted
-                    ? 'Ketikan sinkron aktif.'
-                    : 'Siapkan room lalu mulai bersama.'}
+                    ? 'Ketik kata aktif, lalu tekan spasi saat sudah tepat.'
+                    : hasStartRequirement
+                      ? currentPlayerRoleLabel === 'Host'
+                        ? 'Room siap. Mulai saat pemain sudah siap.'
+                        : 'Room siap. Tunggu host memulai.'
+                      : 'Bagikan Room ID ke lawan.'}
                 </p>
               </div>
               <div className="pill-row">
-                <span className={`status-chip ${timerToneClass}`}>{`${activeTimer}s`}</span>
-                <span className={`status-chip ${channelLive ? 'online' : 'offline'}`}>
-                  {channelLive ? 'Channel Live' : 'Channel Idle'}
-                </span>
-                <span className={`status-chip ${muted ? 'offline' : 'online'}`}>
-                  {muted ? 'Audio Off' : 'Audio On'}
-                </span>
+                {!briefingAccepted ? (
+                  <Link
+                    href="/enigma-protocol/lobby"
+                    className="shell-button subtle"
+                    style={{ textDecoration: 'none' }}
+                  >
+                    Kembali ke Lobby
+                  </Link>
+                ) : (
+                  <span className={`status-chip ${timerToneClass}`}>{`${activeTimer}s`}</span>
+                )}
               </div>
             </div>
 
             {gameMode === 'typing' && !briefingAccepted ? (
               <>
-                <div className="mission-box" style={{ marginTop: '22px' }}>
-                  <p className="section-tag magenta">OPERATION BRIEFING</p>
-                  <h2 style={{ marginTop: '0.8rem', marginBottom: '0.7rem' }}>
-                    {roomState?.operationLabel || activeOperation.alias}
-                  </h2>
-                  <p>Dekripsi 5 stage. Detail target tetap terenkripsi sampai akhir.</p>
-                  <div className="file-list-grid">
-                    <span className="info-pill">
-                      Room ID: <strong style={{ marginLeft: '6px' }}>{roomId}</strong>
-                    </span>
-                    <button type="button" className="shell-button subtle" onClick={copyRoomId}>
-                      {copyStatus}
-                    </button>
-                    <span className={`info-pill ${hasRivalJoined ? 'decoded-flash' : ''}`}>
-                      {roomCountdownLeft === null
-                        ? (hasRivalJoined ? 'Rival Joined' : 'Waiting for Rival')
-                        : `Auto start in ${roomCountdownLeft}s`}
-                    </span>
+                <div className="room-lobby-panel">
+                  <div className="room-lobby-overview">
+                    <div className="room-code-card">
+                      <span>Kode room</span>
+                      <strong>{roomId}</strong>
+                      <button type="button" className="shell-button subtle" onClick={copyRoomId}>
+                        {copyStatus}
+                      </button>
+                    </div>
+
+                    <div className="room-lobby-meta">
+                      <div>
+                        <span>Mode</span>
+                        <strong>{isLocalNetwork ? 'Local Network' : 'Training AI'}</strong>
+                      </div>
+                      <div>
+                        <span>Status</span>
+                        <strong>{preMatchStatusLabel}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="room-player-card">
+                    <div className="room-player-head">
+                      <h3>Daftar pemain</h3>
+                      <span>{`${roomPlayers.length}/${isLocalNetwork ? 2 : 1}`}</span>
+                    </div>
+                    <div className="room-player-list">
+                      {roomPlayers.map((player) => (
+                        <div key={`${player.id}-${player.name}`} className="room-player-entry">
+                          <div>
+                            <strong>{player.name}</strong>
+                            <p>{`${player.role === 'host' ? 'Host' : 'Guest'}${player.clientId === clientSessionId ? ' - Kamu' : ''}`}</p>
+                          </div>
+                          <span>{player.clientId === clientSessionId ? 'Siap' : 'Masuk'}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
-                <div className="openbook-grid" style={{ marginTop: '18px' }}>
-                  {briefingBlocks.map((label) => (
-                    <div key={label} className="openbook-item">
-                      <strong>{label}</strong>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="action-row">
+                <div className="action-row room-lobby-actions">
+                  <button type="button" className="shell-button subtle" onClick={handleLeaveRoom}>
+                    Keluar Room
+                  </button>
                   <button
                     type="button"
                     className="shell-button gradient"
@@ -1244,10 +1193,8 @@ export default function EnigmaProtocolGame() {
                   >
                     {currentPlayerRoleLabel === 'Host'
                       ? hasStartRequirement
-                        ? 'Force Start'
-                        : roomCountdownLeft === null
-                          ? 'Waiting for Rival'
-                          : `Auto ${roomCountdownLeft}s`
+                        ? 'Mulai Sekarang'
+                        : 'Menunggu Lawan'
                       : 'Menunggu Host'}
                   </button>
                 </div>
@@ -1255,8 +1202,8 @@ export default function EnigmaProtocolGame() {
             ) : gameMode === 'typing' ? (
               <>
                 <div className="token-reference">
-                  <p className="section-tag magenta">DECRYPTION FLOW</p>
-                  <p>Ketik kata aktif secara case-sensitive. Stage timeout kembali ke akhir antrean.</p>
+                  <p className="section-tag magenta">TARGET</p>
+                  <p>Ketik kata aktif secara case-sensitive. Jika timer habis, sistem lanjut ke stage berikutnya.</p>
                 </div>
 
                 <div className="arena-center">
@@ -1315,8 +1262,8 @@ export default function EnigmaProtocolGame() {
                   />
                   <div className="typing-stats">
                     <span>{`Target: ${currentTargetWord || '-'}`}</span>
-                    <span>{`Word status: ${wordStatus}`}</span>
-                    <span>{`Recovered key: ${anomalyPassword || '-'}`}</span>
+                    <span>{wordStatus === 'blocked' ? 'Input salah' : wordStatus === 'ready' ? 'Siap submit' : 'Sedang mengetik'}</span>
+                    <span>{`Key: ${anomalyPassword || '-'}`}</span>
                   </div>
                 </div>
 
@@ -1342,7 +1289,7 @@ export default function EnigmaProtocolGame() {
                 </div>
 
                 <div className="helper-box">
-                  <strong>Completed Translation</strong>
+                  <strong>Terjemahan selesai</strong>
                   <p>
                     {completedWords.length === 0
                       ? 'Belum ada kata yang selesai diterjemahkan.'
@@ -1364,7 +1311,7 @@ export default function EnigmaProtocolGame() {
             ) : (
               <>
                 <div className="locked-box">
-                  <p className="section-tag magenta">DECRYPTION LOCK</p>
+                  <p className="section-tag magenta">END CHALLENGE</p>
                   <p>Seluruh antrean stage selesai. Masukkan Decryption Key untuk membuka master file.</p>
                 </div>
 
@@ -1374,7 +1321,7 @@ export default function EnigmaProtocolGame() {
                       key={`attempt-${attemptIndex}`}
                       className={`check ${attemptIndex <= passwordAttemptsLeft ? 'ok' : ''}`}
                     >
-                      {`Security Attempt ${attemptIndex}`}
+                      {`Percobaan ${attemptIndex}`}
                     </div>
                   ))}
                 </div>
@@ -1413,7 +1360,7 @@ export default function EnigmaProtocolGame() {
                     </div>
 
                     <label className="input-block">
-                      <span>Confirm Target IP</span>
+                      <span>Target IP</span>
                       <input
                         value={ipValue}
                         onChange={(event) => setIpValue(event.target.value)}
@@ -1450,133 +1397,26 @@ export default function EnigmaProtocolGame() {
           </article>
         </div>
 
-        <aside className="typing-side">
-          <article className="shell-card side-card">
-            <p className="section-tag cyan">ROOM DOSSIER</p>
-            <h3>{`${roomState?.operationLabel || activeOperation.alias} • ${gameMode === 'typing' ? 'Live Room' : 'End Challenge'}`}</h3>
-            <div className="player-stack">
-              {roomPlayers.map((player) => (
-                <div key={`${player.id}-${player.name}`} className="player-row">
-                  <div>
-                    <strong>{player.name}</strong>
-                    <p>{`${player.role === 'host' ? 'Host' : 'Guest'} • ${player.clientId === clientSessionId ? 'You' : 'Linked'}`}</p>
+        {briefingAccepted ? (
+          <aside className="typing-side">
+            <article className="shell-card side-card">
+              <h3>Pemain</h3>
+              <div className="player-stack">
+                {roomPlayers.map((player) => (
+                  <div key={`${player.id}-${player.name}`} className="player-row">
+                    <div>
+                      <strong>{player.name}</strong>
+                      <p>{`${player.role === 'host' ? 'Host' : 'Guest'} - ${player.clientId === clientSessionId ? 'Kamu' : 'Tersambung'}`}</p>
+                    </div>
+                    <span>{player.progress}%</span>
                   </div>
-                  <span>{player.progress}%</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="verify-box">
-              <div>
-                <span>Operation</span>
-                <strong>{roomState?.operationLabel || activeOperation.alias}</strong>
+                ))}
               </div>
-              <div>
-                <span>Opponent</span>
-                <strong>{isLocalNetwork ? 'Local Network' : 'Training AI'}</strong>
-              </div>
-              <div>
-                <span>Recovered Key</span>
-                <strong>{anomalyPassword || '[PENDING]'}</strong>
-              </div>
-              <div>
-                <span>Target IP</span>
-                <strong>{masterFileUnlocked ? activeOperation.targetIp : '[ENCRYPTED]'}</strong>
-              </div>
-            </div>
-          </article>
-
-          <article className="shell-card side-card">
-            <p className="section-tag magenta">SYSTEM FEED</p>
-            <h3>{muted ? 'Muted Channel' : 'Signal Stable'}</h3>
-            <p>{systemMessage}</p>
-            <div className="check-grid">
-              <div className={`check ${muted ? '' : 'ok'}`}>
-                {muted ? 'Audio Off' : 'Audio Ready'}
-              </div>
-              <div className={`check ${channelLive ? 'ok' : ''}`}>
-                {channelLive ? 'Channel Live' : 'Channel Idle'}
-              </div>
-              <div className={`check ${hasRivalJoined ? 'ok' : ''}`}>
-                {hasRivalJoined ? 'Player 2 Joined' : 'Waiting Link'}
-              </div>
-            </div>
-          </article>
-
-          <article className="shell-card side-card">
-            <p className="section-tag amber">ALGORITHM RULES</p>
-            <h3>Flow terbaru</h3>
-            <div className="result-list">
-              <div className="result-item">
-                <div>
-                  <strong>Typing</strong>
-                  <p>Word-by-word, case-sensitive, dan 70 detik per stage.</p>
-                </div>
-              </div>
-              <div className="result-item">
-                <div>
-                  <strong>Single Pass</strong>
-                  <p>Setiap stage hanya satu putaran, tidak ada pengulangan stage.</p>
-                </div>
-              </div>
-              <div className="result-item">
-                <div>
-                  <strong>Bonus Phase</strong>
-                  <p>Setelah 5 stage selesai, ada 50 detik bonus untuk pengiriman file.</p>
-                </div>
-              </div>
-            </div>
-            <div className="helper-box">
-              <strong>Progress operasi</strong>
-              <div style={{ marginTop: '12px', display: 'grid', gap: '12px' }}>
-                <div>
-                  <div className="progress-label">
-                    <span>Overall</span>
-                    <span>{Math.round(playerProgress)}%</span>
-                  </div>
-                  <div className="progress-track">
-                    <div className="progress-fill player" style={{ width: `${playerProgress}%` }} />
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                  {stages.map((_, index) => {
-                    const isActive = stageQueue[0] === index && gameMode === 'typing';
-                    const isPending = stageQueue.includes(index);
-
-                    return (
-                      <span
-                        key={`progress-stage-${index + 1}`}
-                        className="info-pill"
-                        style={{
-                          border: isActive
-                            ? '1px solid rgba(82, 227, 255, 0.38)'
-                            : !isPending
-                              ? '1px solid rgba(137, 255, 168, 0.28)'
-                              : '1px solid rgba(255,255,255,0.06)',
-                          background: isActive
-                            ? 'rgba(82, 227, 255, 0.12)'
-                            : !isPending
-                              ? 'rgba(137, 255, 168, 0.10)'
-                              : 'rgba(255,255,255,0.04)',
-                        }}
-                      >
-                        {`Stage ${index + 1}`}
-                      </span>
-                    );
-                  })}
-                </div>
-                {stageQueue.length > 0 ? <p style={{ margin: 0 }}>{queuePreview.join(' • ')}</p> : null}
-              </div>
-            </div>
-            <div className="action-row">
-              {isLockedInGameplay ? null : (
-                <button type="button" className="shell-button subtle" onClick={handleLeaveRoom}>
-                  Leave Room
-                </button>
-              )}
-            </div>
-          </article>
-        </aside>
+            </article>
+          </aside>
+        ) : (
+          null
+        )}
       </section>
 
       {matchOverlay ? (
