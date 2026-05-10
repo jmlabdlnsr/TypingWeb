@@ -6,6 +6,7 @@ import { WebSocketServer } from 'ws';
 
 const port = Number(process.env.PORT || 4000);
 const ROOM_CAPACITY = 5;
+const ROOM_AUTO_START_COUNTDOWN_MS = Number(process.env.ROOM_AUTO_START_COUNTDOWN_MS || 20 * 1000);
 const ROOM_IDLE_TTL_MS = Number(process.env.ROOM_IDLE_TTL_MS || 10 * 60 * 1000);
 const SESSION_ACTIVE_TTL_MS = Number(process.env.SESSION_ACTIVE_TTL_MS || 30 * 60 * 1000);
 const ONLINE_ACTIVE_TTL_MS = Number(process.env.ONLINE_ACTIVE_TTL_MS || 15 * 1000);
@@ -109,6 +110,29 @@ function canRoomStart(room) {
   if (!room) return false;
   if (room.opponentMode === 'training-ai') return room.players.length >= 1;
   return room.players.length >= 2;
+}
+
+function ensureCountdown(room) {
+  if (!room || room.startedAt) return;
+  if (canRoomStart(room) && !room.countdownStartedAt) {
+    room.countdownStartedAt = now();
+    room.lastActivityAt = now();
+    broadcastToRoom(room.id, 'countdown_started', {
+      roomId: room.id,
+      countdownStartedAt: room.countdownStartedAt,
+      countdownDurationMs: ROOM_AUTO_START_COUNTDOWN_MS,
+    });
+    broadcastRoomState(room.id);
+  }
+}
+
+function forceStartRoom(room, reason = 'auto') {
+  if (!room || room.startedAt || !canRoomStart(room)) return false;
+  room.startedAt = now();
+  room.lastActivityAt = now();
+  broadcastToRoom(room.id, 'start_match', { roomId: room.id, startedAt: room.startedAt, reason });
+  broadcastRoomState(room.id);
+  return true;
 }
 
 function shouldForfeitAfterLeave(previousCount, remainingCount) {
@@ -283,6 +307,17 @@ function cleanupIdleRooms() {
   }
 }
 
+function processAutoStarts() {
+  const t = now();
+  for (const room of rooms.values()) {
+    if (room.startedAt || !room.countdownStartedAt) continue;
+    const elapsed = t - room.countdownStartedAt;
+    if (elapsed >= ROOM_AUTO_START_COUNTDOWN_MS) {
+      forceStartRoom(room, 'auto_countdown');
+    }
+  }
+}
+
 function disconnectPlayer(sessionToken) {
   const room = findRoomByPlayer(sessionToken);
   if (!room) return;
@@ -344,6 +379,7 @@ function profileByUserId(userId) {
 const server = createServer(async (req, res) => {
   cleanupInactiveSessions();
   cleanupIdleRooms();
+  processAutoStarts();
   applyCors(req, res);
 
   if ((req.method || 'GET') === 'OPTIONS') {
@@ -421,6 +457,7 @@ const server = createServer(async (req, res) => {
 
     rooms.set(room.id, room);
     sessionToRoomId.set(sessionToken, room.id);
+    ensureCountdown(room);
     broadcastGlobalRoomsUpdated();
     return sendJson(res, 201, { room: snapshotRoom(room) });
   }
@@ -454,6 +491,7 @@ const server = createServer(async (req, res) => {
       room.lastActivityAt = now();
       sessionToRoomId.set(sessionToken, room.id);
       broadcastToRoom(room.id, 'player_joined', { player });
+      ensureCountdown(room);
       broadcastRoomState(room.id);
       broadcastGlobalRoomsUpdated();
       return sendJson(res, 200, { room: snapshotRoom(room) });
@@ -639,6 +677,7 @@ for (const [token, user] of bootstrapUsers) users.set(token, user);
 matches = await readJson(MATCHES_FILE, []);
 
 setInterval(cleanupIdleRooms, 30 * 1000).unref();
+setInterval(processAutoStarts, 1000).unref();
 
 server.listen(port, () => {
   console.log(`Enigma Backend running on http://localhost:${port}`);
